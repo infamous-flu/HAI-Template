@@ -33,12 +33,12 @@ OPENAI_API_KEY=your_api_key_here
 
 ### Running the Application
 
-1. Start the backend server:
+1. Start the backend server in a terminal window:
 ```bash
 python main.py
 ```
 
-2. Start a local web server on port 3000
+2. Open a new terminal window and start the frontend server on port 3000
 ```bash
 python -m http.server 3000
 ```
