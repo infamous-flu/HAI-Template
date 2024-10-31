@@ -56,7 +56,7 @@ def process_with_llm(text: str) -> Optional[str]:
 
         # Get response from GPT
         chat_completion = client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o-mini",
             messages=messages
         )
 
