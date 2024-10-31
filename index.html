@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            background: black;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        .torus {
+            font-family: monospace;
+            font-size: 10px;
+            line-height: 10px;
+            white-space: pre;
+            text-align: center;
+            position: absolute;
+            transform: scale(2);
+            transition: color 0.3s ease;
+        }
+        #debug-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00ff00;
+            font-family: monospace;
+            text-align: left;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 14px 10px 10px;
+            border: 1px solid #00ff00;
+            width: 600px;
+            height: 100px;
+            overflow-y: auto;
+            font-size: 12.5px;
+            line-height: 1.4;
+        }
+        .chat-message {
+            margin: 3px 0;
+            padding: 2px 0;
+            border-left: 2px solid #00ff00;
+            padding-left: 8px;
+            word-wrap: break-word;
+        }
+        .user-message {
+            color: #00ffff;
+        }
+        .assistant-message {
+            color: #ff69b4;
+        }
+        #debug-panel::-webkit-scrollbar {
+            width: 3px;
+            margin-right: 6px;
+        }
+        #debug-panel::-webkit-scrollbar-track {
+            background: #000;
+            box-shadow: inset 0 0 1px rgba(0, 0, 0, 0.5);
+        }
+        #debug-panel::-webkit-scrollbar-thumb {
+            background: #00ff00;
+            border-radius: 0;
+            border: 1px solid #000;
+        }
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: black;
+            z-index: 1000;
+            }
+    </style>
+</head>
+<body>
+    <div id="loading-screen"></div>
+    <div id="outer-torus" class="torus"></div>
+    <div id="inner-torus" class="torus"></div>
+    <div id="innermost-torus" class="torus"></div>
+    <script>
+        const DEBUG = false;
+
+        if (DEBUG) {
+            const debugPanel = document.createElement('div');
+            debugPanel.id = 'debug-panel';
+            debugPanel.style.display = 'block';
+            document.body.appendChild(debugPanel);
+            debugLog('Hold down the space bar to start talking (when in standby)');
+        }
+
+        const States = {
+            STANDBY: 'standby',
+            LISTENING: 'listening',
+            PROCESSING: 'processing',
+            SPEAKING: 'speaking'
+        };
+
+        const ColorPalettes = {
+            [States.STANDBY]: {
+                outer: '#2F4F4F',
+                inner: '#00FFFF',
+                innermost: '#FF8C00'
+            },
+            [States.LISTENING]: {
+                outer: '#FF8C00',
+                inner: '#00FF00',
+                innermost: '#FF69B4'
+            },
+            [States.PROCESSING]: {
+                outer: '#FF69B4',
+                inner: '#FFFF00',
+                innermost: '#1E90FF'
+            },
+            [States.SPEAKING]: {
+                outer: '#1E90FF',
+                inner: '#FF1493',
+                innermost: '#2F4F4F'
+            }
+        };
+
+        let currentState = States.STANDBY;
+        let currentAudio = null;
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let frames = null;
+
+        function setState(newState) {
+            currentState = newState;
+            updateColors();
+            if (DEBUG) {
+                debugLog(`State: ${newState}`);
+            }
+        }
+
+        function debugLog(message, type = 'log') {
+            if (!DEBUG) return;
+            
+            const debugPanel = document.getElementById('debug-panel');
+            
+            if (type === 'history' && Array.isArray(message)) {
+                debugPanel.innerHTML = '<div style="color: #ffff00;">Chat History:</div>';
+                message.forEach(msg => {
+                    const div = document.createElement('div');
+                    div.className = `chat-message ${msg.role}-message`;
+                    div.textContent = `${msg.role}: ${msg.content}`;
+                    debugPanel.appendChild(div);
+                });
+            } else {
+                const entry = document.createElement('div');
+                entry.textContent = message;
+                debugPanel.appendChild(entry);
+            }
+            
+            debugPanel.scrollTop = debugPanel.scrollHeight;
+        }
+
+        function updateColors() {
+            const colors = ColorPalettes[currentState];
+            outerTorus.style.color = colors.outer;
+            innerTorus.style.color = colors.inner;
+            innermostTorus.style.color = colors.innermost;
+        }
+
+        const outerTorus = document.getElementById('outer-torus');
+        const innerTorus = document.getElementById('inner-torus');
+        const innermostTorus = document.getElementById('innermost-torus');
+
+        let frameIndices = {
+            outer: 0,
+            inner: 0,
+            innermost: 0
+        };
+
+        function animate() {
+            if (frames) {
+                outerTorus.textContent = frames.outer[frameIndices.outer];
+                innerTorus.textContent = frames.inner[frameIndices.inner];
+                innermostTorus.textContent = frames.innermost[frameIndices.innermost];
+                
+                frameIndices.outer = (frameIndices.outer + 1) % frames.outer.length;
+                frameIndices.inner = (frameIndices.inner - 1 + frames.inner.length) % frames.inner.length;
+                frameIndices.innermost = (frameIndices.innermost + 1) % frames.innermost.length;
+            }
+            requestAnimationFrame(animate);
+        }
+
+        async function processAudioWithBackend(audioBlob) {
+            setState(States.PROCESSING);
+            debugLog('Processing audio...');
+            
+            const formData = new FormData();
+            formData.append('audio_file', audioBlob, 'recording.wav');
+
+            try {
+                const response = await fetch('http://localhost:8000/process-voice', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                setState(States.SPEAKING);
+                
+                if (DEBUG && data.history) {
+                    debugLog(data.history, 'history');
+                }
+
+                const audioBytes = atob(data.audio);
+                const audioArray = new Uint8Array(audioBytes.length);
+                for (let i = 0; i < audioBytes.length; i++) {
+                    audioArray[i] = audioBytes.charCodeAt(i);
+                }
+                const audioBlob = new Blob([audioArray], { type: 'audio/mpeg' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                currentAudio = new Audio(audioUrl);
+                
+                currentAudio.onended = () => {
+                    setState(States.STANDBY);
+                    URL.revokeObjectURL(audioUrl);
+                    currentAudio = null;
+                };
+
+                await currentAudio.play();
+                
+            } catch (error) {
+                console.error('Error:', error);
+                setState(States.STANDBY);
+                debugLog(`Error: ${error.message}`);
+            }
+        }
+
+        async function setupAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    await processAudioWithBackend(audioBlob);
+                    audioChunks = [];
+                };
+
+                document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Space' && !isRecording && currentState === States.STANDBY) {
+                        e.preventDefault();
+                        isRecording = true;
+                        setState(States.LISTENING);
+                        debugLog('Listening...');
+                        audioChunks = [];
+                        mediaRecorder.start();
+                    }
+                });
+
+                document.addEventListener('keyup', (e) => {
+                    if (e.code === 'Space' && isRecording) {
+                        e.preventDefault();
+                        isRecording = false;
+                        mediaRecorder.stop();
+                    }
+                });
+
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                debugLog('Error accessing microphone. Please check permissions.');
+            }
+        }
+
+        async function loadFrames() {
+            try {
+                const response = await fetch('frames.json');
+                frames = await response.json();
+                document.getElementById('loading-screen').style.display = 'none';
+            } catch (error) {
+                console.error('Error loading frames:', error);
+                document.getElementById('loading-screen').textContent = 'Error loading frames';
+            }
+        }
+
+        // Initialize everything
+        async function initialize() {
+            await loadFrames();
+            animate();
+            await setupAudio();
+            setState(States.STANDBY);
+        }
+
+        // Start everything
+        initialize();
+    </script>
+</body>
+</html>
