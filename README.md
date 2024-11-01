@@ -1,6 +1,6 @@
 # Voice Chat Interface
 
-A retro-styled voice chat interface that uses OpenAI's APIs for speech-to-text, language processing, and text-to-speech conversion.
+A voice chat interface that uses OpenAI's APIs for speech-to-text, language processing, and text-to-speech conversion.
 
 ## Overview
 
